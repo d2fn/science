@@ -1,0 +1,129 @@
+#!/bin/sh
+set -e
+#
+# timestamp
+#
+timestamp=`date +%s | cut -d 'm' -f 2`
+
+#
+# host
+#
+longhost=`hostname`
+host=`
+    echo "$longhost" |
+    cut -f1 -d.
+`
+
+#
+# num - the sequence number of this host (3 for db3c, for example)
+#       works by matching the first series of one or more numbers in the first part of the hostname
+#
+num=`
+    echo "$host" |
+    sed -e 's/[^0-9]*\([0-9][0-9]*\).*/\1/'
+`
+
+#
+# role - db, fe, fs, aux, etc
+#        grab everything before the num above
+#
+role=`
+    echo "$host" |
+    awk '{
+        r = ""
+        for(i = 1; i <= length($1); i++) {
+            c = substr($1, i, 1)
+            if(c ~ /[0-9]/) {
+                break
+            }
+            r = r c
+        }
+        print r
+    }'
+`
+
+#
+# load averages 1, 5, 15
+#
+
+loadavgs=`
+  uptime |
+    sed -e 's/,//g' |
+    awk '{
+        print $(NF-2) "\t" $(NF-1) "\t" $(NF)
+    }'
+`
+load1=`echo "$loadavgs" | cut -f1`
+load5=`echo "$loadavgs" | cut -f2`
+load15=`echo "$loadavgs" | cut -f3`
+
+#
+# uptime - machine uptime in days
+#
+up=`
+    uptime |
+    awk '{
+        print $3
+    }'
+`
+
+#
+# ioutil - the % of cpu time spent waiting for io
+#          we always choose the busiest device to report on
+#
+ioutil=`
+    iostat -x |
+    grep -A10 Device |
+    grep -v Device |
+    awk '{
+        print $(NF)
+    }' |
+    sort -g |
+    tail -n 1
+`
+
+#
+# cpus - report the number of logical cpus on this machine
+#
+cpus=`
+    cat /proc/cpuinfo |
+    grep processor |
+    wc -l
+`
+
+#
+# usedcpu - overall % cpu use
+#
+usedcpu=`
+    mpstat |
+    grep -A 2 "%idle" |
+    awk -F " " '
+        NR == 1 {
+            for(i = 1; i <= NF; i++)
+                if($i == "%idle") {
+                    f = i
+                }
+            next
+        }
+        {
+            print 100 - $f
+        }
+    '
+`
+
+#
+# usedmem - total % of free memory
+#
+usedmem=`
+    free -mt |
+    tail -n 1 |
+    awk '{
+        print $4 / $2 * 100.0
+    }'
+`
+
+# mark the end of the line where we write these fields so that they can be parsed for metadata description later
+# planning another script that will use the lines above to print a header when grabbing metrics using gh-each
+
+printf "%s\t%s\t%s\t%s\t"                 $timestamp $host $role $num                               # @dimensions
+printf "%s\t%s\t%s\t%s\t%s\t%s\t%s\t%s\n" $load1 $load5 $load15 $up $ioutil $cpus $usedcpu $usedmem # @measures
